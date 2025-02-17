@@ -12,17 +12,7 @@ import {
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
-import {
-  Camera,
-  Monitor,
-  StopCircle,
-  Pause,
-  Play,
-  Loader2,
-  Mic,
-  MicOff,
-} from "lucide-react";
+import { Camera, Monitor, StopCircle, Pause, Play } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 
 type VideoQuality = "480p" | "720p" | "1080p" | "1440p" | "2160p";
@@ -37,18 +27,22 @@ const videoQualities: {
   "2160p": { width: 3840, height: 2160 },
 };
 
-export default function Component() {
+export default function ScreenRecorder() {
   const [recordingState, setRecordingState] = useState<
-    "idle" | "recording" | "paused" | "processing"
+    "idle" | "recording" | "paused"
   >("idle");
+  const [screenRecordingUrl, setScreenRecordingUrl] = useState<string | null>(
+    null
+  );
+  const [webcamRecordingUrl, setWebcamRecordingUrl] = useState<string | null>(
+    null
+  );
   const [combinedRecordingUrl, setCombinedRecordingUrl] = useState<
     string | null
   >(null);
   const [videoQuality, setVideoQuality] = useState<VideoQuality>("1080p");
   const [webcamPosition, setWebcamPosition] = useState({ x: 10, y: 10 });
   const [webcamSize, setWebcamSize] = useState(25); // percentage of screen width
-  const [showPreview, setShowPreview] = useState(false);
-  const [isVoiceDetected, setIsVoiceDetected] = useState(false);
 
   const screenVideoRef = useRef<HTMLVideoElement>(null);
   const webcamVideoRef = useRef<HTMLVideoElement>(null);
@@ -56,8 +50,6 @@ export default function Component() {
   const webcamStreamRef = useRef<MediaStream | null>(null);
   const screenRecorderRef = useRef<MediaRecorder | null>(null);
   const webcamRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioAnalyserRef = useRef<AnalyserNode | null>(null);
-  const animationFrameRef = useRef<number | null>(null);
 
   const requestPermissions = useCallback(async () => {
     try {
@@ -78,13 +70,6 @@ export default function Component() {
         screenVideoRef.current.srcObject = screenStream;
       if (webcamVideoRef.current)
         webcamVideoRef.current.srcObject = webcamStream;
-
-      // Set up audio analysis
-      const audioContext = new AudioContext();
-      const audioSource = audioContext.createMediaStreamSource(webcamStream);
-      const analyser = audioContext.createAnalyser();
-      audioSource.connect(analyser);
-      audioAnalyserRef.current = analyser;
 
       toast({
         title: "Permissions granted",
@@ -121,22 +106,22 @@ export default function Component() {
     const screenChunks: Blob[] = [];
     const webcamChunks: Blob[] = [];
 
-    screenRecorder.ondataavailable = (e) => screenChunks.push(e.data);
-    webcamRecorder.ondataavailable = (e) => webcamChunks.push(e.data);
-
-    screenRecorder.onstop = () => {
+    screenRecorder.ondataavailable = (e) => {
+      screenChunks.push(e.data);
       const screenBlob = new Blob(screenChunks, { type: "video/webm" });
+      setScreenRecordingUrl(URL.createObjectURL(screenBlob));
+    };
+
+    webcamRecorder.ondataavailable = (e) => {
+      webcamChunks.push(e.data);
       const webcamBlob = new Blob(webcamChunks, { type: "video/webm" });
-      combineVideos(screenBlob, webcamBlob);
+      setWebcamRecordingUrl(URL.createObjectURL(webcamBlob));
     };
 
     screenRecorder.start(1000); // Capture every second
     webcamRecorder.start(1000); // Capture every second
 
     setRecordingState("recording");
-
-    // Start voice detection
-    detectVoice();
   }, [requestPermissions]);
 
   const pauseRecording = useCallback(() => {
@@ -155,78 +140,79 @@ export default function Component() {
     }
   }, []);
 
-  const combineVideos = useCallback(
-    async (screenBlob: Blob, webcamBlob: Blob) => {
-      setRecordingState("processing");
+  const combineVideos = useCallback(async () => {
+    if (!screenRecordingUrl || !webcamRecordingUrl) return;
 
-      const screenVideo = document.createElement("video");
-      const webcamVideo = document.createElement("video");
+    const screenVideo = document.createElement("video");
+    const webcamVideo = document.createElement("video");
 
-      screenVideo.src = URL.createObjectURL(screenBlob);
-      webcamVideo.src = URL.createObjectURL(webcamBlob);
+    screenVideo.src = screenRecordingUrl;
+    webcamVideo.src = webcamRecordingUrl;
 
-      await Promise.all([
-        new Promise((resolve) => (screenVideo.onloadedmetadata = resolve)),
-        new Promise((resolve) => (webcamVideo.onloadedmetadata = resolve)),
-      ]);
+    await Promise.all([
+      new Promise((resolve) => (screenVideo.onloadedmetadata = resolve)),
+      new Promise((resolve) => (webcamVideo.onloadedmetadata = resolve)),
+    ]);
 
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
 
-      if (!ctx) {
-        console.error("Unable to create canvas context");
-        return;
+    if (!ctx) {
+      console.error("Unable to create canvas context");
+      return;
+    }
+
+    const { width, height } = videoQualities[videoQuality];
+    canvas.width = width;
+    canvas.height = height;
+
+    const webcamWidth = (webcamSize / 100) * width;
+    const webcamHeight =
+      (webcamWidth / webcamVideo.videoWidth) * webcamVideo.videoHeight;
+    const webcamX = (webcamPosition.x / 100) * (width - webcamWidth);
+    const webcamY = (webcamPosition.y / 100) * (height - webcamHeight);
+
+    const stream = canvas.captureStream();
+    const combinedRecorder = new MediaRecorder(stream, {
+      mimeType: "video/webm; codecs=vp9",
+    });
+
+    const combinedChunks: Blob[] = [];
+    combinedRecorder.ondataavailable = (e) => combinedChunks.push(e.data);
+    combinedRecorder.onstop = () => {
+      const combinedBlob = new Blob(combinedChunks, { type: "video/webm" });
+      setCombinedRecordingUrl(URL.createObjectURL(combinedBlob));
+    };
+
+    combinedRecorder.start();
+
+    const drawFrame = () => {
+      ctx.drawImage(screenVideo, 0, 0, width, height);
+      ctx.drawImage(webcamVideo, webcamX, webcamY, webcamWidth, webcamHeight);
+
+      if (!screenVideo.paused && !screenVideo.ended) {
+        requestAnimationFrame(drawFrame);
+      } else {
+        combinedRecorder.stop();
       }
+    };
 
-      const { width, height } = videoQualities[videoQuality];
-      canvas.width = width;
-      canvas.height = height;
-
-      const webcamWidth = (webcamSize / 100) * width;
-      console.log(webcamPosition, "webcamPosition-------------");
-
-      const webcamHeight =
-        (webcamWidth / webcamVideo.videoWidth) * webcamVideo.videoHeight;
-      const webcamX = (webcamPosition.x / 100) * (width - webcamWidth);
-      const webcamY = (webcamPosition.y / 100) * (height - webcamHeight);
-
-      const stream = canvas.captureStream();
-      const combinedRecorder = new MediaRecorder(stream, {
-        mimeType: "video/webm; codecs=vp9",
-      });
-
-      const combinedChunks: Blob[] = [];
-      combinedRecorder.ondataavailable = (e) => combinedChunks.push(e.data);
-      combinedRecorder.onstop = () => {
-        const combinedBlob = new Blob(combinedChunks, { type: "video/webm" });
-        setCombinedRecordingUrl(URL.createObjectURL(combinedBlob));
-        setRecordingState("idle");
-      };
-
-      combinedRecorder.start();
-
-      const drawFrame = () => {
-        ctx.drawImage(screenVideo, 0, 0, width, height);
-        ctx.drawImage(webcamVideo, webcamX, webcamY, webcamWidth, webcamHeight);
-
-        if (!screenVideo.paused && !screenVideo.ended) {
-          requestAnimationFrame(drawFrame);
-        } else {
-          combinedRecorder.stop();
-        }
-      };
-
-      screenVideo.play();
-      webcamVideo.play();
-      drawFrame();
-    },
-    [videoQuality, webcamPosition, webcamSize]
-  );
+    screenVideo.play();
+    webcamVideo.play();
+    drawFrame();
+  }, [
+    screenRecordingUrl,
+    webcamRecordingUrl,
+    videoQuality,
+    webcamPosition,
+    webcamSize,
+  ]);
 
   const stopRecording = useCallback(() => {
     if (screenRecorderRef.current && webcamRecorderRef.current) {
       screenRecorderRef.current.stop();
       webcamRecorderRef.current.stop();
+      setRecordingState("idle");
 
       if (screenStreamRef.current) {
         screenStreamRef.current.getTracks().forEach((track) => track.stop());
@@ -235,35 +221,15 @@ export default function Component() {
         webcamStreamRef.current.getTracks().forEach((track) => track.stop());
       }
 
-      // Stop voice detection
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-
       toast({
         title: "Recording stopped",
-        description: "Preparing final video...",
+        description: "Combining screen and webcam recordings...",
       });
+
+      // Combine videos after stopping the recording
+      combineVideos();
     }
-  }, []);
-
-  const detectVoice = useCallback(() => {
-    if (!audioAnalyserRef.current) return;
-
-    const analyser = audioAnalyserRef.current;
-    const bufferLength = analyser.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
-
-    const checkAudio = () => {
-      analyser.getByteFrequencyData(dataArray);
-      const average = dataArray.reduce((a, b) => a + b) / bufferLength;
-      setIsVoiceDetected(average > 10); // Adjust threshold as needed
-
-      animationFrameRef.current = requestAnimationFrame(checkAudio);
-    };
-
-    checkAudio();
-  }, []);
+  }, [combineVideos]);
 
   useEffect(() => {
     return () => {
@@ -273,41 +239,11 @@ export default function Component() {
       if (webcamStreamRef.current) {
         webcamStreamRef.current.getTracks().forEach((track) => track.stop());
       }
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
     };
   }, []);
 
-  // Update webcam preview position and size
-  useEffect(() => {
-    if (webcamVideoRef.current && screenVideoRef.current) {
-      const screenWidth = screenVideoRef.current.offsetWidth;
-      const screenHeight = screenVideoRef.current.offsetHeight;
-
-      const webcamWidth = (webcamSize / 100) * screenWidth;
-      const webcamHeight =
-        (webcamWidth / webcamVideoRef.current.videoWidth) *
-        webcamVideoRef.current.videoHeight;
-
-      const webcamX = (webcamPosition.x / 100) * (screenWidth - webcamWidth);
-      const webcamY = (webcamPosition.y / 100) * (screenHeight - webcamHeight);
-
-      webcamVideoRef.current.style.position = "absolute";
-      webcamVideoRef.current.style.width = `${webcamWidth}px`;
-      webcamVideoRef.current.style.height = `${webcamHeight}px`;
-      webcamVideoRef.current.style.left = `${webcamX}px`;
-      webcamVideoRef.current.style.top = `${webcamY}px`;
-    }
-  }, [webcamPosition, webcamSize]);
-
-  const isRecording =
-    recordingState === "recording" || recordingState === "paused";
   return (
     <div className="container mx-auto p-4">
-      <div className="sticky top-0 z-10 bg-gradient-to-r from-purple-500 to-pink-500 p-4 mb-4 border-b-2 border-white">
-        <h1 className="text-3xl font-bold text-white text-center">reckshack</h1>
-      </div>
       <Card className="mb-4">
         <CardHeader>
           <CardTitle>Screen and Webcam Recorder</CardTitle>
@@ -319,7 +255,6 @@ export default function Component() {
               <Select
                 value={videoQuality}
                 onValueChange={(value: VideoQuality) => setVideoQuality(value)}
-                disabled={isRecording}
               >
                 <SelectTrigger id="video-quality">
                   <SelectValue placeholder="Select quality" />
@@ -342,7 +277,6 @@ export default function Component() {
                 step={1}
                 value={[webcamSize]}
                 onValueChange={([value]) => setWebcamSize(value)}
-                disabled={isRecording}
               />
             </div>
           </div>
@@ -358,7 +292,6 @@ export default function Component() {
                 onValueChange={([value]) =>
                   setWebcamPosition((prev) => ({ ...prev, x: value }))
                 }
-                disabled={isRecording}
               />
             </div>
             <div>
@@ -372,18 +305,8 @@ export default function Component() {
                 onValueChange={([value]) =>
                   setWebcamPosition((prev) => ({ ...prev, y: value }))
                 }
-                disabled={isRecording}
               />
             </div>
-          </div>
-          <div className="flex items-center space-x-2 mb-4">
-            <Switch
-              id="show-preview"
-              checked={showPreview}
-              onCheckedChange={setShowPreview}
-              disabled={isRecording}
-            />
-            <Label htmlFor="show-preview">Show Preview</Label>
           </div>
           <div className="flex justify-center space-x-4 mb-4">
             {recordingState === "idle" ? (
@@ -394,35 +317,22 @@ export default function Component() {
               <Button onClick={pauseRecording}>
                 <Pause className="mr-2 h-4 w-4" /> Pause Recording
               </Button>
-            ) : recordingState === "paused" ? (
+            ) : (
               <Button onClick={resumeRecording}>
                 <Play className="mr-2 h-4 w-4" /> Resume Recording
               </Button>
-            ) : null}
+            )}
             <Button
               onClick={stopRecording}
-              disabled={
-                recordingState === "idle" || recordingState === "processing"
-              }
+              disabled={recordingState === "idle"}
               variant="destructive"
             >
               <StopCircle className="mr-2 h-4 w-4" /> Stop Recording
             </Button>
           </div>
-          {isRecording && (
-            <div className="flex items-center justify-center space-x-2 mb-4">
-              {isVoiceDetected ? (
-                <Mic className="h-6 w-6 text-green-500" />
-              ) : (
-                <MicOff className="h-6 w-6 text-red-500" />
-              )}
-              <span>
-                {isVoiceDetected ? "Voice detected" : "No voice detected"}
-              </span>
-            </div>
-          )}
-          {showPreview && (
-            <div className="relative">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <h3 className="text-lg font-semibold mb-2">Screen Preview</h3>
               <video
                 ref={screenVideoRef}
                 className="w-full h-auto border rounded"
@@ -430,27 +340,60 @@ export default function Component() {
                 playsInline
                 autoPlay
               />
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold mb-2">Webcam Preview</h3>
               <video
                 ref={webcamVideoRef}
-                className="absolute border rounded"
+                className="w-full h-auto border rounded"
                 muted
                 playsInline
                 autoPlay
               />
             </div>
-          )}
+          </div>
         </CardContent>
       </Card>
-      {recordingState === "processing" && (
-        <div className="flex flex-col items-center justify-center p-4">
-          <Loader2 className="h-8 w-8 animate-spin" />
-          <p className="mt-2 text-lg font-semibold">Preparing video...</p>
-        </div>
-      )}
-      {combinedRecordingUrl && recordingState === "idle" && (
+      {(screenRecordingUrl || webcamRecordingUrl) &&
+        recordingState !== "idle" && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Live Recordings</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 gap-4">
+                {screenRecordingUrl && (
+                  <div>
+                    <h3 className="text-lg font-semibold mb-2">
+                      Screen Recording
+                    </h3>
+                    <video
+                      src={screenRecordingUrl}
+                      className="w-full h-auto border rounded"
+                      controls
+                    />
+                  </div>
+                )}
+                {webcamRecordingUrl && (
+                  <div>
+                    <h3 className="text-lg font-semibold mb-2">
+                      Webcam Recording
+                    </h3>
+                    <video
+                      src={webcamRecordingUrl}
+                      className="w-full h-auto border rounded"
+                      controls
+                    />
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+      {combinedRecordingUrl && (
         <Card>
           <CardHeader>
-            <CardTitle>Final Recording</CardTitle>
+            <CardTitle>Combined Recording</CardTitle>
           </CardHeader>
           <CardContent>
             <video
