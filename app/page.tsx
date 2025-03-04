@@ -45,8 +45,9 @@ export default function Component() {
     string | null
   >(null);
   const [videoQuality, setVideoQuality] = useState<VideoQuality>("1080p");
-  const [webcamPosition, setWebcamPosition] = useState({ x: 10, y: 10 });
-  const [webcamSize, setWebcamSize] = useState(25); // percentage of screen width
+  const [webcamPosition, setWebcamPosition] = useState({ x: 5, y: 80 });
+  const [webcamSize, setWebcamSize] = useState(17); // percentage of screen width
+  const [webcamBorderRadius, setWebcamBorderRadius] = useState(25); // percentage of border radius
   const [showPreview, setShowPreview] = useState(false);
   const [isVoiceDetected, setIsVoiceDetected] = useState(false);
 
@@ -183,8 +184,6 @@ export default function Component() {
       canvas.height = height;
 
       const webcamWidth = (webcamSize / 100) * width;
-      console.log(webcamPosition, "webcamPosition-------------");
-
       const webcamHeight =
         (webcamWidth / webcamVideo.videoWidth) * webcamVideo.videoHeight;
       const webcamX = (webcamPosition.x / 100) * (width - webcamWidth);
@@ -219,6 +218,35 @@ export default function Component() {
       screenVideo.play();
       webcamVideo.play();
       drawFrame();
+
+      // Combine audio tracks
+      const audioContext = new AudioContext();
+      const screenAudioSource = audioContext.createMediaElementSource(screenVideo);
+      const webcamAudioSource = audioContext.createMediaElementSource(webcamVideo);
+      const destination = audioContext.createMediaStreamDestination();
+
+      screenAudioSource.connect(destination);
+      webcamAudioSource.connect(destination);
+
+      const combinedStream = new MediaStream([
+        ...stream.getVideoTracks(),
+        ...destination.stream.getAudioTracks(),
+      ]);
+
+      const finalRecorder = new MediaRecorder(combinedStream, {
+        mimeType: "video/webm; codecs=vp9",
+      });
+
+      const finalChunks: Blob[] = [];
+      finalRecorder.ondataavailable = (e) => finalChunks.push(e.data);
+      finalRecorder.onstop = () => {
+        const finalBlob = new Blob(finalChunks, { type: "video/webm" });
+        setCombinedRecordingUrl(URL.createObjectURL(finalBlob));
+        setRecordingState("idle");
+      };
+
+      finalRecorder.start();
+      combinedRecorder.onstop = () => finalRecorder.stop();
     },
     [videoQuality, webcamPosition, webcamSize]
   );
@@ -298,8 +326,9 @@ export default function Component() {
       webcamVideoRef.current.style.height = `${webcamHeight}px`;
       webcamVideoRef.current.style.left = `${webcamX}px`;
       webcamVideoRef.current.style.top = `${webcamY}px`;
+      webcamVideoRef.current.style.borderRadius = `${webcamBorderRadius}%`;
     }
-  }, [webcamPosition, webcamSize]);
+  }, [webcamPosition, webcamSize, webcamBorderRadius, showPreview]);
 
   const isRecording =
     recordingState === "recording" || recordingState === "paused";
@@ -376,6 +405,20 @@ export default function Component() {
               />
             </div>
           </div>
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <div>
+              <Label htmlFor="webcam-border-radius">Webcam Border Radius (%)</Label>
+              <Slider
+                id="webcam-border-radius"
+                min={0}
+                max={50}
+                step={1}
+                value={[webcamBorderRadius]}
+                onValueChange={([value]) => setWebcamBorderRadius(value)}
+                disabled={isRecording}
+              />
+            </div>
+          </div>
           <div className="flex items-center space-x-2 mb-4">
             <Switch
               id="show-preview"
@@ -425,14 +468,14 @@ export default function Component() {
             <div className="relative">
               <video
                 ref={screenVideoRef}
-                className="w-full h-auto border rounded"
+                className="w-full h-auto border rounded max-w-md" // Add max-w-md class
                 muted
                 playsInline
                 autoPlay
               />
               <video
                 ref={webcamVideoRef}
-                className="absolute border rounded"
+                className="absolute border rounded max-w-xs" // Add max-w-xs class
                 muted
                 playsInline
                 autoPlay
